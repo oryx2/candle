@@ -5,11 +5,11 @@
 #include "hardware/structs/systick.h"
 
 #define IR_SENSOR 29
-#define MOTOR 27
+#define MOTOR 28
 
-// matrix on GPIO 0 to 15, 26, 28
+// matrix on GPIO 0 to 15, 26, 27
 #define ANODES   0x000000FF
-#define CATHODES 0x1400FF00
+#define CATHODES 0x0C00FF00
 
 // cols are anodes
 // rows are cathodes (ten available)
@@ -28,14 +28,10 @@ int mode = 0;
 #include "fdata-liquid.h"
 #include "fdata-fire.h"
 #include "font.h"
-#include "fdata-ball.h"
 
 #define SIG_START 1
 #define MOTOR_TIMEOUT_MS 250
 #define IDLE_TIMEOUT_MS 1000
-#define IR_SENSOR_THRESHOLD_U16 10000
-#define MOTOR_DUTY_SLOW_U16 0.60f
-#define MOTOR_DUTY_FAST_U16 0.30f
 
 #define SYSTICK_RVR 0x00FFFFFF
 
@@ -134,16 +130,6 @@ static inline void check_battery(){
   return;
 }
 
-static inline uint16_t read_ir_sensor_u16(void)
-{
-  return (uint16_t)((adc_read() * 65535u) / 4095u);
-}
-
-static inline bool read_ir_sensor_state(void)
-{
-  return read_ir_sensor_u16() > IR_SENSOR_THRESHOLD_U16;
-}
-
 void load_frame(const uint32_t* data){
   int k=0;
   bool n = !active_frame;
@@ -165,11 +151,11 @@ void clr(){
 // r: [0...7]
 void set_voxel(uint32_t r, uint32_t theta, uint32_t z) {
   uint32_t rownum;
-  // 0x1400FF00
+  //0x0C00FF00
   if (z == 8)
     rownum = 26;
   else if (z == 9)
-    rownum = 28;
+    rownum = 27;
   else rownum = z+8;
 
   framebuffer[active_frame][theta][r] &= ~(1<<rownum);
@@ -180,11 +166,11 @@ void set_voxel(uint32_t r, uint32_t theta, uint32_t z) {
 // r: [0...7]
 void set_voxel_reflect(uint32_t r, uint32_t theta, uint32_t z) {
   uint32_t rownum;
-  // 0x1400FF00
+  //0x0C00FF00
   if (z == 8)
     rownum = 26;
   else if (z == 9)
-    rownum = 28;
+    rownum = 27;
   else rownum = z+8;
 
   if (z>9 || theta>23 || r>7 || r<0) return;
@@ -234,13 +220,11 @@ void load_text(){
 
 int main(){
 
-  gpio_init_mask(ANODES | CATHODES | (1 << MOTOR));
+  gpio_init_mask(ANODES|CATHODES|(1<<MOTOR)|(1<<IR_SENSOR));
 
+  gpio_set_dir(IR_SENSOR, 0);
+  gpio_pull_up(IR_SENSOR);
   gpio_set_dir_out_masked(ANODES|CATHODES);
-
-  adc_init();
-  adc_gpio_init(IR_SENSOR);
-  adc_select_input(3);
 
   gpio_set_function(MOTOR, GPIO_FUNC_PWM); // channel 6B
 
@@ -262,8 +246,7 @@ int main(){
 
   while (1) {
 
-    while (read_ir_sensor_state() == 1)
-      ;
+    while (gpio_get(IR_SENSOR) == 1);
     uint32_t t0 = systick_hw->cvr;
     multicore_fifo_push_blocking(SIG_START);
     systick_hw->cvr = SYSTICK_RVR;
@@ -280,15 +263,12 @@ int main(){
     // 1200RPM or 20rps -> 6250000
     // 24rps = 5208333 cycles
 
-    if (period > 6250000)
-      pwm_set_gpio_level(MOTOR, MOTOR_DUTY_SLOW_U16 * 65535);
-    else
-      pwm_set_gpio_level(MOTOR, MOTOR_DUTY_FAST_U16 * 65535);
+    if (period > 6250000) pwm_set_gpio_level(MOTOR, 0.9*65535);
+    else pwm_set_gpio_level(MOTOR, 0.6*65535);
 
-#define load_static(data)                  \
-  if (++f >= sizeof data / sizeof data[0]) \
-    f = 0;                                 \
-  load_frame(&data[f][0][0]);
+    #define load_static( data ) \
+      if (++f>= sizeof data / sizeof data[0]) f=0; \
+      load_frame(&data[f][0][0]);
 
     if (mode == 0) {
       load_frame(&framedata_cube[0][0][0]);
@@ -304,11 +284,12 @@ int main(){
     }
     //else if (mode == 4) {
     else {
-      load_static(framedata_ball);
+      load_text();
     }
 
-    while (read_ir_sensor_state() == 0)
-      sleep_us(1);
+    while (gpio_get(IR_SENSOR) == 0) sleep_us(1);
+
+
   }
 }
 
